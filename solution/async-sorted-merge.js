@@ -2,7 +2,9 @@
 
 // Print all entries, across all of the *async* sources, in chronological order.
 
-module.exports = async (logSources, printer) => {
+
+
+module.exports = (logSources, printer) => {
   let sources = logSources.map((source) => {
     const promise = source.popAsync();
     const sourceObject = {
@@ -14,17 +16,36 @@ module.exports = async (logSources, printer) => {
     });
     return sourceObject;
   });
-  await Promise.all(sources.map(source => source.nextPromise));
-  while(sources.some(source => source.next)) {
-    const nextLogSource = sources.reduce((agg, curr) => {
-      if (curr.next?.date.getTime() < agg.next?.date.getTime()) {
-        return curr;
-      }
-      return agg;
-    });
+
+  const continuePrintingLogs = (orderedSources, resolve) => {
+    const nextLogSource = orderedSources[0];
     printer.print(nextLogSource.next);
-    nextLogSource.next = await nextLogSource.source.popAsync();
-    sources = sources.filter(source => source.next);
+    orderedSources = orderedSources.slice(1);
+    nextLogSource.source.popAsync().then((nextMessage) => {
+      nextLogSource.next = nextMessage;
+      if (nextLogSource.next) {
+        const nextIndex = orderedSources.findIndex(source => source.next.date.getTime() > nextLogSource.next.date.getTime());
+        if (nextIndex >= 0) {
+          orderedSources.splice(nextIndex, 0, nextLogSource);
+        } else {
+          orderedSources.push(nextLogSource);
+        }
+      }
+      if (orderedSources.some(source => source.next)) {
+        continuePrintingLogs(orderedSources, resolve);
+      } else {
+        resolve();
+      }
+    });
   }
-  printer.done();
+
+  return Promise.all(sources.map(source => source.nextPromise)).then(() => {
+    sources.sort((a,b) => a.next.date.getTime() - b.next.date.getTime() );  
+    return new Promise((resolve, reject) => {
+      continuePrintingLogs(sources, resolve);
+    }).then(() => {
+      printer.done();
+    });
+  });
+
 };
